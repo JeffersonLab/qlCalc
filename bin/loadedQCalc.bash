@@ -17,4 +17,4 @@ else
     export PYTHONPATH="${APPDIR}"
 fi
 
-python3 "${APPDIR}/app/main.py"
+python3 "${APPDIR}/qlCalc/main.py"
