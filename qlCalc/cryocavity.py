@@ -111,7 +111,7 @@ class Cryocavity:
             self.attenuation_factor = attenuation_factor
 
     def calculate_attenuation(self):
-        """Calculate the attenuation for a cryocavity
+        """Calculate the attenuation for a cryocavity.  Requires that the attenuation_factor has been calculated.
 
             Returns (None): Updates object's attenutation attribute.
         """
@@ -119,7 +119,7 @@ class Cryocavity:
         self.attenuation = -10 * math.log10(self.attenuation_factor)
 
     def calculate_P_fc(self):
-        """Compute the corrected forward power for a cryocavity
+        """Compute the corrected forward power for a cryocavity.  Requires that attenuation has been calculated.
 
             Returns (None): Updates object's P_fc attribute.
         """
@@ -127,7 +127,7 @@ class Cryocavity:
         self.P_fc = self.P_f * math.pow(10, -self.attenuation / 10)
 
     def calculate_P_rc(self):
-        """Compute the corrected reflected power for a cryocavity
+        """Compute the corrected reflected power for a cryocavity.  Requires that attenuation has been calculated.
 
             Returns (None): Updates the object's P_rc attribute.
         """
@@ -135,7 +135,8 @@ class Cryocavity:
         self.P_rc = self.P_r * math.pow(10, self.attenuation / 10)
 
     def calculate_Q_lf(self):
-        """Calculate the loaded Q for a cryocavity using the corrected forward power
+        """Calculate the loaded Q for a cryocavity using the corrected forward power.    Requires that attenuation,
+         P_fc, and P_rc have been calculated.
 
             Returns (None): Updates the object's Q_lf attribute
         """
