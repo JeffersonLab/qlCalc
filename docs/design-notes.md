@@ -21,3 +21,8 @@ This is just a quick jotting down of design ideas as I work through the problem
   - probably doesn't need to be a service since no one will send it commands
     - but maybe they will want to change things on the fly?  Adjust speed of repeated calculations?  Can always make it
       configurable and restart the app ...
+
+
+## Cryocavity Lists
+C75 cells - 1L13-1/2
+F100 - 1L23
