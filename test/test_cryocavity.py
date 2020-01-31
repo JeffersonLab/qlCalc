@@ -1,10 +1,18 @@
 import unittest
 from unittest import TestCase
 from qlCalc.cryocavity import Cryocavity
+import time
+import math
 
 
 class TestCryocavity(TestCase):
-    c100 = Cryocavity(17.794, 3.396, 0.805, 0.67, 'c100', 0.7, 868.9, 201.8, 'some_time_2')
+    c100 = Cryocavity(GETDATA=None, GMESLQ=None, CRFPLQ=None, CRRPLQ=None, DETALQ=None, ITOTLQ=None, STARTLQ=None,
+                      ENDLQ=None, cavity_name="my_cav", cavity_type="my_cav_type", length=0.7, RQ=868.9, queue=None)
+    c100.update_formula_data(V_c=(17.794 * 0.7 * 1000000), P_f=(3.396 * 1000), P_r=(0.805 * 1000),
+                             detune_angle=math.radians(0.67), I_tot=(201.8 / 1000000))
+
+    # GMESLQ, CRFPLQ, CRRPLQ, DETALQ, cavity_type, length, RQ, ITOT, sync_timestamp
+    # c100 = Cryocavity(17.794, 3.396, 0.805, 0.67, 'c100', 0.7, 868.9, 201.8, 'some_time_2')
 
     def test_1_calculate_attenuation_factor(self):
         self.c100.calculate_attenuation_factor()
