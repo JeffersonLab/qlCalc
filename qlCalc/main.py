@@ -2,6 +2,7 @@ import logging
 from qlCalc.cryocavity import Cryocavity
 import time
 import os
+import threading
 import queue
 import epics
 from epics import PV
@@ -22,6 +23,19 @@ logging.basicConfig(level=log_level, filename=log_file, filemode='a', datefmt="%
 logger = logging.getLogger(app_name)
 
 
+def process_new_data(cav_dict, update_queue):
+    while True:
+        cav_name = update_queue.get()
+        print(ascii(cav_dict[cav_name].GETDATA.callbacks))
+        logger.debug("Consumer received cavity '%s'", cav_name)
+        cav_dict[cav_name].process_new_data(delay=10)
+        logger.debug("Finished processing new cavity data %s", cav_name)
+
+
+def request_new_data(cav_dict, req_queue):
+    pass
+
+
 def main():
     logger.info("{} {} beginning execution".format(app_name, app_version))
 
@@ -39,6 +53,10 @@ def main():
 
     for cc in cav_dict:
         cav_dict[cc].trigger_data_collection()
+
+    # Start a thread that will process the data associated with a new set of data for an individual cavity
+    update_thread = threading.Thread(target=process_new_data, args=(cav_dict, update_queue))
+    update_thread.start()
 
 
 if __name__ == '__main__':
