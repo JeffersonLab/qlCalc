@@ -24,7 +24,7 @@ class Cryocavity:
     """
 
     @staticmethod
-    def create_cryocavity(cavity_name, update_queue, epics_prefix=None):
+    def create_cryocavity(cavity_name, update_queue, shutdown_event, epics_prefix=None):
         # TODO: Update factory to handle more than just C100s
         length = 0.7
         epics_name = qlCalc.utils.get_epics_cavity_name(cavity_name)
@@ -49,14 +49,14 @@ class Cryocavity:
         # Create the cavity object
         return Cryocavity(GETDATA=GETDATA, GMESLQ=GMESLQ, CRFPLQ=CRFPLQ, CRRPLQ=CRRPLQ, DETALQ=DETALQ, ITOTLQ=ITOTLQ,
                           STARTLQ=STARTLQ, ENDLQ=ENDLQ, cavity_name=cavity_name, cavity_type=cavity_type, length=length,
-                          RQ=RQ, update_queue=update_queue)
+                          RQ=RQ, update_queue=update_queue, shutdown_event=shutdown_event)
 
     def get_ced_data(self):
         # TODO: Implement method that get CED data related to the cryocavity and it's parent cryomodule
         pass
 
     def __init__(self, GETDATA, GMESLQ, CRFPLQ, CRRPLQ, DETALQ, ITOTLQ, STARTLQ, ENDLQ, cavity_name, cavity_type,
-                 length, RQ, update_queue):
+                 length, RQ, update_queue, shutdown_event):
         """Construct a cryocavity object with references to the appropriate PVs and parameters for the cryocavity
             Args:
                 GETDATA (PV): value is the state of the data request process.  (0 = idle, 1 = data requested, 2 = data
@@ -72,7 +72,8 @@ class Cryocavity:
                 cavity_type (str): type of cavity cell
                 length (float): active length of cryocavity in meters
                 RQ (float): characteristic shunt impedance in Ohms
-                update_queue (queue.Queue): Event queue to which on_GETDATA_change writes
+                update_queue (queue.Queue): Queue to which on_GETDATA_change writes to trigger processing data
+                shutdown_event (threading.Event): Event used to signal graceful shutdown
         """
         self.GETDATA = GETDATA  #: PV: The cavity's R???GETDATA pv object
         self.ITOTLQ = ITOTLQ  #: PV: The cavity's R???ITOTLQ pv object
@@ -86,7 +87,8 @@ class Cryocavity:
         self.cavity_type = cavity_type  #: string: The cavity's CED cavity_type
         self.length = length  #: string: The cavity's active length
         self.RQ = RQ  #: string: The cavity's resistance (related to shunt impedance)
-        self.queue = update_queue  #: The queue to which GETDATA monitor callbacks should write when new data is ready.
+        self.update_queue = update_queue  #: queue to which GETDATA monitor callbacks should write if new data is ready
+        self.shutdown_event = shutdown_event  #: event used to signal a graceful shutdown (no new requests, process old)
 
         # Hang a callback on the GETDATA monitor so we can have the callback thread notify the main thread of the new
         # data.  None may be used in unit tests - can't add a callback to that.
@@ -124,11 +126,17 @@ class Cryocavity:
         else:
             raise ValueError("Received unsupported out value '{}'".format(out))
 
-    def request_data_collection(self):
+    def request_new_data(self, delay):
         """Method to make a normal data request.  Tracks when request is made to help with scheduling next request.
             Returns (None): No return"""
-        self.last_request_timestamp = time.time()
-        self.GETDATA.put(1)
+        if self.shutdown_event.is_set():
+            logger.info("request_new_data method skipping request since shutdown is active - %s", self.cavity_name)
+        else:
+            logger.debug("About to sleep %d seconds - %s", delay, self.cavity_name)
+            time.sleep(delay)
+            logger.debug("Triggering next data collection - %s", self.cavity_name)
+            self.last_request_timestamp = time.time()
+            self.GETDATA.put(1)
 
     def trigger_data_collection(self):
         """Method to 'force' trigger data collection.  Typically, processes should toggle between states 1 and 2
@@ -163,7 +171,7 @@ class Cryocavity:
         Returns None:  Returns nothing
         """
         # TODO: figure out the channel access stuff
-        logger.debug("Reading PV data and updating formula variables")
+        logger.debug("Reading PV data and updating formula variables - %s", self.cavity_name)
         # Update internal formula variables to base SI units (PVs are not necessarily in those)
         if V_c is None:
             self.V_c = self.GMESLQ.get() * self.length * 1000000
@@ -188,14 +196,18 @@ class Cryocavity:
 
     def on_GETDATA_change(self, pvname=None, value=None, char_value=None, **kw):
         """Callback function for handling changes in GETDATA PV.  Simple writes the cavity name to the 'event' queue."""
-        logger.debug("on_GETDATA_change callback received %s = %s (qsize=%d)", pvname, value, self.queue.qsize())
+        logger.debug("on_GETDATA_change callback received %s = %s (qsize=%d) - %s", pvname, value,
+                     self.update_queue.qsize(), self.cavity_name)
         if value == 0:
             return
         if value == 1:
             return
         elif value == 2:
-            logger.debug("on_GETDATA_change writing to queue")
-            self.queue.put(self.cavity_name)
+            if self.shutdown_event.is_set():
+                logger.debug("on_GETDATA_change ignoring new data as part of shutdown - %s", self.cavity_name)
+            else:
+                logger.debug("on_GETDATA_change writing to queue - %s", self.cavity_name)
+                self.update_queue.put(self.cavity_name)
 
     def process_new_data(self, delay=1):
         """Method for processing new data.  Read from EPICS, run calculations, write results, and request more data.
@@ -203,26 +215,20 @@ class Cryocavity:
                 delay (float): Delay is seconds from exporting results to requesting next round of data collection.
             Returns (None): Returns nothing
         """
-        logger.debug("Processing new data")
+        logger.debug("Processing new data - %s", self.cavity_name)
         value = self.GETDATA.get()
         if value != 2:
-            logger.warning("process_new_data found %s = %d (!= 2, i.e., Data Posted) (%s)", self.GETDATA.pvname,
-                           self.GETDATA.value,
-                           self.cavity_name)
+            logger.warning("process_new_data found %s = %d (!= 2, i.e., Data Posted) - %s", self.GETDATA.pvname,
+                           self.GETDATA.value, self.cavity_name)
         self.update_formula_data()
         self.run_calculations()
         self.export_results()
-        # TODO: this delay will need to move to it's own thread somewhere ... not sure about this part.
-        logger.debug("About to sleep %d seconds - %s", delay, self.cavity_name)
-        time.sleep(delay)
-        logger.debug("Triggering next data collection")
-        self.GETDATA.put(1)
 
     def run_calculations(self):
         """Reads current values of the synchronized *LQ PVs from the control system and performs all calculations.
             Returns (None): Returns nothing
         """
-        logger.debug("Beginning calculation run")
+        logger.debug("Beginning calculation run - %s", self.cavity_name)
         self.calculate_attenuation_factor()
         self.calculate_attenuation()
         self.calculate_P_fc()
@@ -235,66 +241,6 @@ class Cryocavity:
         # TODO: Figure out the current interface with the IOC to get timestamp info
         # self.data_sync_start = self.STARTLQ.value
         # self.data_sync_end = self.ENDLQ.value
-
-    # # TODO: Add units to all of these attributes
-    # def __init__(self, GMESLQ, CRFPLQ, CRRPLQ, DETALQ, cavity_type, length, RQ, ITOT, sync_timestamp):
-    #     """Construct a cryocavity object with the specified parameters.  These parameters should
-    #         Args:
-    #             GMESLQ (float): measured cavity gradient in MV/m
-    #             CRFPLQ (float): forward power (uncorrected) in kW
-    #             CRRPLQ (float): reflected power (uncorrected) in kW
-    #             DETALQ (float): relative detune angle in degrees
-    #             cavity_type (str): type of cavity cell
-    #             length (float): active length of cryocavity in meters
-    #             RQ (float): characteristic shunt impedance in Ohms
-    #             ITOT (float): beam current experienced by cavity in uA
-    #             sync_timestamp (string): time stamp associated with the synchronized data collection
-    #     """
-    #
-    #     # Constructor parameters map to the synchronized EPICS data, but the calculations all expect base SI units.
-    #     # Do the unit conversion when importing the parameters
-    #     self.V_c = GMESLQ * length * 1000000  #: float: cavity voltage in V
-    #     self.P_f = CRFPLQ * 1000  #: float: synchronized RF forward power in W
-    #     self.P_r = CRRPLQ * 1000  #: float: synchronized RF reflected power in W
-    #     self.detune_angle = math.radians(
-    #         DETALQ)  #: float: synchronized detune angle (called psi by F. Marhauser) in radians
-    #     self.I_tot = ITOT / 1000000  #: float: Total beam current experienced by this cavity in Amps
-    #
-    #     # TODO: Update cavity_type to be own class?
-    #     self.cavity_type = cavity_type  #: string: Type of cryocavity
-    #     self.length = length  #: float: CED cryocavity length parameter for this cryocavity in meters
-    #     self.RQ = RQ  #: float: cryocavity parameter (resistance / Q - called R/Q by F. Marhauser) in Ohms
-    #
-    #     # TODO: verify the type of the sync_timestamp parameter
-    #     self.sync_timestamp = sync_timestamp  #: string: The timestamp of the FCC IOC data synchronization
-    #     # TODO: verify type of calc_timestamp.  Probably should be a native date time object
-    #     self.calc_timestamp = None  #: string: The timestamp when the calculations are run
-    #
-    #     # These attributes may/should be calculated at some point later
-    #     self.attenuation_factor = None  #: float: The calculated attenuation factor.  None until calculated
-    #     self.attenuation = None  #: float: The calculated attenuation.  None until calculated
-    #     self.P_fc = None  #: float: The calculated corrected forward power.  None until calculated
-    #     self.P_rc = None  #: float: The calculated corrected reflected power.  None until calculated
-    #     self.Q_lf = None  #: float: The calculated loaded Q based on forward power.  None until calculated
-    #     self.Q_lr = None  #: float: The calculated loaded Q based on reflected power.  None until calculated
-    #     self.err_msg = []  #: list(string): A list of error messages that may be found during calculations
-
-    # TODO: This should probably be moved to the main loop and only calculated twice (once for NL and SL each)
-    # TODO: Keep or remove?  George has a R2XXITOT PV available
-    # def calculate_beam_current(self, HA_curr, HB_curr, HC_curr, HD_curr, HA_passes, HB_passes, HC_passes, HD_passes):
-    #     """Calculate the beam current experienced by a cryocavity
-    #
-    #         Args:
-    #             HA_curr (float):  Hall A Injector current
-    #             HB_curr (float):  Hall B Injector current
-    #             HC_curr (float):  Hall C Injector current
-    #             HD_curr (float):  Hall D Injector current
-    #             HA_passes (int):  Number of passes for Hall A
-    #             HD_passes (int):  Number of passes for Hall B
-    #             HC_passes (int):  Number of passes for Hall C
-    #             HB_passes (int):  Number of passes for Hall D
-    #     """
-    #     pass
 
     def calculate_attenuation_factor(self):
         """Calculate the attenuation factor for a cryocavity
@@ -309,11 +255,11 @@ class Cryocavity:
 
         # According to F. Marhauser, this can only be in [0,1].  Truncate if bounds are exceeded.
         if attenuation_factor > 1:
-            logger.warning("Attenuation factor lowered from {} to 1".format(attenuation_factor))
+            logger.warning("Attenuation factor lowered from %d to 1 - %s", attenuation_factor, self.cavity_name)
             self.err_msg.append("Attenuation factor lowered from {} to 1".format(attenuation_factor))
             self.attenuation_factor = 1
         elif attenuation_factor < 0:
-            logger.warning("Attenuation factor raised from {} to 0".format(attenuation_factor))
+            logger.warning("Attenuation factor raised from %d to 0 - %s", attenuation_factor, self.cavity_name)
             self.err_msg.append("Attenuation factor raised from {} to 0".format(attenuation_factor))
             self.attenuation_factor = 0
         else:
@@ -322,7 +268,7 @@ class Cryocavity:
     def calculate_attenuation(self):
         """Calculate the attenuation for a cryocavity.  Requires that the attenuation_factor has been calculated.
 
-            Returns (None): Updates object's attenutation attribute.
+            Returns (None): Updates object's attenuation attribute.
         """
 
         self.attenuation = -10 * math.log10(self.attenuation_factor)
