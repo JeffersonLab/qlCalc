@@ -2,6 +2,7 @@ import math
 import logging
 import time
 import epics
+import atexit
 from epics import PV
 
 import qlCalc.utils
@@ -47,9 +48,14 @@ class Cryocavity:
         logger.debug("About to construct Cryocavity %s.  GETDATA.value = %d", cavity_name, GETDATA.get())
 
         # Create the cavity object
-        return Cryocavity(GETDATA=GETDATA, GMESLQ=GMESLQ, CRFPLQ=CRFPLQ, CRRPLQ=CRRPLQ, DETALQ=DETALQ, ITOTLQ=ITOTLQ,
-                          STARTLQ=STARTLQ, ENDLQ=ENDLQ, cavity_name=cavity_name, cavity_type=cavity_type, length=length,
-                          RQ=RQ, update_queue=update_queue, shutdown_event=shutdown_event)
+        cav = Cryocavity(GETDATA=GETDATA, GMESLQ=GMESLQ, CRFPLQ=CRFPLQ, CRRPLQ=CRRPLQ, DETALQ=DETALQ, ITOTLQ=ITOTLQ,
+                         STARTLQ=STARTLQ, ENDLQ=ENDLQ, cavity_name=cavity_name, cavity_type=cavity_type, length=length,
+                         RQ=RQ, update_queue=update_queue, shutdown_event=shutdown_event)
+
+        # Register the objects cleanup method to be run on nomral program exit
+        atexit.register(cav.cleanup)
+
+        return cav
 
     def get_ced_data(self):
         # TODO: Implement method that get CED data related to the cryocavity and it's parent cryomodule
@@ -112,6 +118,18 @@ class Cryocavity:
         self.data_sync_start = None  #: str: time stamp of beginning of the data synchronization process
         self.data_sync_end = None  #: str: time stamp of end of the data synchronization process
         self.last_request_timestamp = None  #: float: Unix time stamp of last request.
+
+    def cleanup(self):
+        """Method the cleans up any attached resources, e.g., connected PVs"""
+        logger.debug("Disconnecting all PVs as part of cleanup - %s", self.cavity_name)
+        self.GETDATA.disconnect()
+        self.ITOTLQ.disconnect()
+        self.DETALQ.disconnect()
+        self.CRRPLQ.disconnect()
+        self.CRFPLQ.disconnect()
+        self.GMESLQ.disconnect()
+        self.STARTLQ.disconnect()
+        self.ENDLQ.disconnect()
 
     def export_results(self, out="stdout"):
         """Routine for exporting results to either EPICS control system or printing them to STDOUT.
@@ -203,11 +221,8 @@ class Cryocavity:
         if value == 1:
             return
         elif value == 2:
-            if self.shutdown_event.is_set():
-                logger.debug("on_GETDATA_change ignoring new data as part of shutdown - %s", self.cavity_name)
-            else:
-                logger.debug("on_GETDATA_change writing to queue - %s", self.cavity_name)
-                self.update_queue.put(self.cavity_name)
+            logger.debug("on_GETDATA_change writing to queue - %s", self.cavity_name)
+            self.update_queue.put(self.cavity_name)
 
     def process_new_data(self, delay=1):
         """Method for processing new data.  Read from EPICS, run calculations, write results, and request more data.
