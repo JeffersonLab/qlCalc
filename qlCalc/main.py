@@ -4,6 +4,7 @@ import time
 import os
 import threading
 import queue
+import signal
 import epics
 from epics import PV
 
@@ -29,32 +30,41 @@ shutdown_event = threading.Event()
 # Setup a signal handler to gracefully shutdown the application.  Threads should be watching this event and gracefully
 # stop
 def sig_handler(signum, frame):
-    if signum in (1, 2, 3, 15):
-        logger.info("receeved signal '%d' - gracefully terminating.", signum)
-        shutdown_event.set()
+    logger.info("received signal '%s' - gracefully terminating.", signum)
+    shutdown_event.set()
 
 
 def process_new_data(cav_dict, update_queue, req_queue, event):
     while not event.is_set() or not update_queue.empty():
+        logger.debug("Top of process_new_data loop.  event.is_set = %s", str(event.is_set()))
         cav_name = update_queue.get()
         logger.debug("process_new_data thread received cavity '%s'", cav_name)
         cav_dict[cav_name].process_new_data()
         logger.debug("process_new_data thread finished new cavity data %s", cav_name)
         logger.debug("process_new_data thread writing '%s' to request_queue", cav_name)
         req_queue.put(cav_name)
+    logger.debug("process_new_data method has exited")
 
 
 def request_new_data(cav_dict, req_queue, delay, event):
     while not event.is_set() or not req_queue.empty():
+        logger.debug("Top of request_new_data loop.  event.is_set = %s", str(event.is_set()))
         cav_name = req_queue.get()
         logger.debug("request_new_data thread received cavity '%s'", cav_name)
         # This method will request that new data be collected
         cav_dict[cav_name].request_new_data(delay)
         logger.debug("request_new_data thread made request for '%s'", cav_name)
+    logger.debug("request_new_data method has exited")
 
 
 def main():
     logger.info("{} {} beginning execution".format(app_name, app_version))
+
+    # Attach the "shutdown" signal handler to appropriate signals
+    signal.signal(signal.SIGHUP, sig_handler)
+    signal.signal(signal.SIGINT, sig_handler)
+    signal.signal(signal.SIGQUIT, sig_handler)
+    signal.signal(signal.SIGTERM, sig_handler)
 
     # Queue for tracking which cavities have new data available and for tracking future requests.  maxsize=1000 since
     # that is roughly twice the max number of cavities.  Should only ever have one active entry for each cavity, and
@@ -86,6 +96,7 @@ def main():
     update_thread.join()
     request_thread.join()
 
+    logger.debug("main routine exiting.")
 
 if __name__ == '__main__':
     main()
