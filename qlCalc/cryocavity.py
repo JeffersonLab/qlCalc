@@ -24,7 +24,7 @@ class Cryocavity:
     """
 
     @staticmethod
-    def create_cryocavity(cavity_name, queue, epics_prefix=None):
+    def create_cryocavity(cavity_name, update_queue, epics_prefix=None):
         # TODO: Update factory to handle more than just C100s
         length = 0.7
         epics_name = qlCalc.utils.get_epics_cavity_name(cavity_name)
@@ -49,14 +49,14 @@ class Cryocavity:
         # Create the cavity object
         return Cryocavity(GETDATA=GETDATA, GMESLQ=GMESLQ, CRFPLQ=CRFPLQ, CRRPLQ=CRRPLQ, DETALQ=DETALQ, ITOTLQ=ITOTLQ,
                           STARTLQ=STARTLQ, ENDLQ=ENDLQ, cavity_name=cavity_name, cavity_type=cavity_type, length=length,
-                          RQ=RQ, queue=queue)
+                          RQ=RQ, update_queue=update_queue)
 
     def get_ced_data(self):
         # TODO: Implement method that get CED data related to the cryocavity and it's parent cryomodule
         pass
 
     def __init__(self, GETDATA, GMESLQ, CRFPLQ, CRRPLQ, DETALQ, ITOTLQ, STARTLQ, ENDLQ, cavity_name, cavity_type,
-                 length, RQ, queue):
+                 length, RQ, update_queue):
         """Construct a cryocavity object with references to the appropriate PVs and parameters for the cryocavity
             Args:
                 GETDATA (PV): value is the state of the data request process.  (0 = idle, 1 = data requested, 2 = data
@@ -72,7 +72,7 @@ class Cryocavity:
                 cavity_type (str): type of cavity cell
                 length (float): active length of cryocavity in meters
                 RQ (float): characteristic shunt impedance in Ohms
-                queue (queue.Queue): Event queue to which on_GETDATA_change writes
+                update_queue (queue.Queue): Event queue to which on_GETDATA_change writes
         """
         self.GETDATA = GETDATA
         self.ITOTLQ = ITOTLQ
@@ -86,7 +86,7 @@ class Cryocavity:
         self.cavity_type = cavity_type
         self.length = length
         self.RQ = RQ
-        self.queue = queue
+        self.queue = update_queue
 
         # Hang a callback on the GETDATA monitor so we can have the callback thread notify the main thread of the new
         # data.  None may be used in unit tests - can't add a callback to that.

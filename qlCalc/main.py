@@ -26,27 +26,19 @@ def main():
     logger.info("{} {} beginning execution".format(app_name, app_version))
 
     # Queue for tracking which cavities have collected data
-    event_queue = queue.Queue(maxsize=1000)
+    update_queue = queue.Queue(maxsize=1000)
 
     cav_names = ("VL26-7", "VL26-8")
-#    cav_names = ("VL26-7",)
+    #    cav_names = ("VL26-7",)
     cav_dict = {}
     for cav in cav_names:
         logger.debug("About to create_cryocavity %s", cav)
-        cc = Cryocavity.create_cryocavity(cav, queue=event_queue, epics_prefix="adamc:")
+        cc = Cryocavity.create_cryocavity(cav, update_queue=update_queue, epics_prefix="adamc:")
         cav_dict[cav] = cc
         logger.debug("About to trigger data collection on %s", cc.cavity_name)
 
     for cc in cav_dict:
         cav_dict[cc].trigger_data_collection()
-
-
-    while True:
-        cav_name = event_queue.get()
-        print(ascii(cav_dict[cav_name].GETDATA.callbacks))
-        logger.debug("Consumer received cavity '%s'", cav_name)
-        cav_dict[cav_name].process_new_data(delay=10)
-        logger.debug("Finished processing new cavity data %s", cav_name)
 
 
 if __name__ == '__main__':
