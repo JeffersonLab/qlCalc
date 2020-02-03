@@ -74,19 +74,19 @@ class Cryocavity:
                 RQ (float): characteristic shunt impedance in Ohms
                 update_queue (queue.Queue): Event queue to which on_GETDATA_change writes
         """
-        self.GETDATA = GETDATA
-        self.ITOTLQ = ITOTLQ
-        self.DETALQ = DETALQ
-        self.CRRPLQ = CRRPLQ
-        self.CRFPLQ = CRFPLQ
-        self.GMESLQ = GMESLQ
-        self.STARTLQ = STARTLQ
-        self.ENDLQ = ENDLQ
-        self.cavity_name = cavity_name
-        self.cavity_type = cavity_type
-        self.length = length
-        self.RQ = RQ
-        self.queue = update_queue
+        self.GETDATA = GETDATA  #: PV: The cavity's R???GETDATA pv object
+        self.ITOTLQ = ITOTLQ  #: PV: The cavity's R???ITOTLQ pv object
+        self.DETALQ = DETALQ  #: PV: The cavity's R???DETALQ pv object
+        self.CRRPLQ = CRRPLQ  #: PV: The cavity's R???CRRPLQ pv object
+        self.CRFPLQ = CRFPLQ  #: PV: The cavity's R???CRFPLQ pv object
+        self.GMESLQ = GMESLQ  #: PV: The cavity's R???GMESLQ pv object
+        self.STARTLQ = STARTLQ  #: PV: The cavity's R???STARTLQ pv object
+        self.ENDLQ = ENDLQ  #: PV: The cavity's R???ENDLQ pv object
+        self.cavity_name = cavity_name  #: string: The cavity's CED element name
+        self.cavity_type = cavity_type  #: string: The cavity's CED cavity_type
+        self.length = length  #: string: The cavity's active length
+        self.RQ = RQ  #: string: The cavity's resistance (related to shunt impedance)
+        self.queue = update_queue  #: The queue to which GETDATA monitor callbacks should write when new data is ready.
 
         # Hang a callback on the GETDATA monitor so we can have the callback thread notify the main thread of the new
         # data.  None may be used in unit tests - can't add a callback to that.
@@ -109,6 +109,7 @@ class Cryocavity:
         self.I_tot = None  #: float: Total beam current experienced by this cavity in Amps
         self.data_sync_start = None  #: str: time stamp of beginning of the data synchronization process
         self.data_sync_end = None  #: str: time stamp of end of the data synchronization process
+        self.last_request_timestamp = None  #: float: Unix time stamp of last request.
 
     def export_results(self, out="stdout"):
         """Routine for exporting results to either EPICS control system or printing them to STDOUT.
@@ -123,11 +124,18 @@ class Cryocavity:
         else:
             raise ValueError("Received unsupported out value '{}'".format(out))
 
+    def request_data_collection(self):
+        """Method to make a normal data request.  Tracks when request is made to help with scheduling next request.
+            Returns (None): No return"""
+        self.last_request_timestamp = time.time()
+        self.GETDATA.put(1)
+
     def trigger_data_collection(self):
         """Method to 'force' trigger data collection.  Typically, processes should toggle between states 1 and 2
             Returns (None): No return
         """
         self.GETDATA.put(0)
+        self.last_request_timestamp = time.time()
         self.GETDATA.put(1)
 
     # TODO: finish implementing this method
@@ -198,7 +206,8 @@ class Cryocavity:
         logger.debug("Processing new data")
         value = self.GETDATA.get()
         if value != 2:
-            logger.warning("process_new_data found %s = %d (!= 2, i.e., Data Posted) (%s)", self.GETDATA.pvname, self.GETDATA.value,
+            logger.warning("process_new_data found %s = %d (!= 2, i.e., Data Posted) (%s)", self.GETDATA.pvname,
+                           self.GETDATA.value,
                            self.cavity_name)
         self.update_formula_data()
         self.run_calculations()
