@@ -10,8 +10,15 @@ import qlCalc.utils
 logger = logging.getLogger(__name__)
 
 
-# TODO: Add logging of error messages
+class CavityTask:
+    """A class representing a notification that a cavity needs it's data processed and a new data request sent."""
 
+    def __init__(self, cavity_name, request_timestamp):
+        self.request_timestamp = request_timestamp  #: time.time  The time at which the next request should be made
+        self.cavity_name = cavity_name  #: str: The CED element name of the cavity
+
+
+# TODO: Add logging of error messages
 # noinspection PyPep8Naming
 class Cryocavity:
     """A class representing a CEBAF Cryocavity.
@@ -49,8 +56,9 @@ class Cryocavity:
 
         # Create the cavity object
         cav = Cryocavity(GETDATA=GETDATA, GMESLQ=GMESLQ, CRFPLQ=CRFPLQ, CRRPLQ=CRRPLQ, DETALQ=DETALQ, ITOTLQ=ITOTLQ,
-                         STARTLQ=STARTLQ, ENDLQ=ENDLQ, cavity_name=cavity_name, cavity_type=cavity_type, length=length,
-                         RQ=RQ, update_queue=update_queue, shutdown_event=shutdown_event)
+                         STARTLQ=STARTLQ, ENDLQ=ENDLQ, cavity_name=cavity_name, cavity_type=cavity_type,
+                         request_interval=1, length=length, RQ=RQ, update_queue=update_queue,
+                         shutdown_event=shutdown_event)
 
         # Register the objects cleanup method to be run on nomral program exit
         atexit.register(cav.cleanup)
@@ -62,7 +70,7 @@ class Cryocavity:
         pass
 
     def __init__(self, GETDATA, GMESLQ, CRFPLQ, CRRPLQ, DETALQ, ITOTLQ, STARTLQ, ENDLQ, cavity_name, cavity_type,
-                 length, RQ, update_queue, shutdown_event):
+                 request_interval, length, RQ, update_queue, shutdown_event):
         """Construct a cryocavity object with references to the appropriate PVs and parameters for the cryocavity
             Args:
                 GETDATA (PV): value is the state of the data request process.  (0 = idle, 1 = data requested, 2 = data
@@ -76,11 +84,13 @@ class Cryocavity:
                 ENDLQ (PV): value is the time stamp associated with the end synchronized data collection
                 cavity_name (str): the CED name of the cavity
                 cavity_type (str): type of cavity cell
+                request_interval (float): The target time interval in seconds between data requests
                 length (float): active length of cryocavity in meters
                 RQ (float): characteristic shunt impedance in Ohms
                 update_queue (queue.Queue): Queue to which on_GETDATA_change writes to trigger processing data
                 shutdown_event (threading.Event): Event used to signal graceful shutdown
         """
+        self.request_interval = request_interval  #: float: The target time interval in seconds between data requests.
         self.GETDATA = GETDATA  #: PV: The cavity's R???GETDATA pv object
         self.ITOTLQ = ITOTLQ  #: PV: The cavity's R???ITOTLQ pv object
         self.DETALQ = DETALQ  #: PV: The cavity's R???DETALQ pv object
@@ -144,17 +154,15 @@ class Cryocavity:
         else:
             raise ValueError("Received unsupported out value '{}'".format(out))
 
-    def request_new_data(self, delay):
+    def request_new_data(self):
         """Method to make a normal data request.  Tracks when request is made to help with scheduling next request.
             Returns (None): No return"""
-        if self.shutdown_event.is_set():
-            logger.info("request_new_data method skipping request since shutdown is active - %s", self.cavity_name)
-        else:
-            logger.debug("About to sleep %d seconds - %s", delay, self.cavity_name)
-            time.sleep(delay)
-            logger.debug("Triggering next data collection - %s", self.cavity_name)
-            self.last_request_timestamp = time.time()
-            self.GETDATA.put(1)
+        # if self.shutdown_event.is_set():
+        #     logger.info("request_new_data method skipping request since shutdown is active - %s", self.cavity_name)
+        # else:
+        logger.debug("Triggering next data collection - %s", self.cavity_name)
+        self.last_request_timestamp = time.time()
+        self.GETDATA.put(1)
 
     def trigger_data_collection(self):
         """Method to 'force' trigger data collection.  Typically, processes should toggle between states 1 and 2
@@ -221,13 +229,12 @@ class Cryocavity:
         if value == 1:
             return
         elif value == 2:
-            logger.debug("on_GETDATA_change writing to queue - %s", self.cavity_name)
-            self.update_queue.put(self.cavity_name)
+            next_req = self.last_request_timestamp + self.request_interval
+            logger.debug("on_GETDATA_change writing to queue - (%s, %f)", self.cavity_name, next_req)
+            self.update_queue.put(CavityTask(self.cavity_name, next_req))
 
-    def process_new_data(self, delay=1):
+    def process_new_data(self):
         """Method for processing new data.  Read from EPICS, run calculations, write results, and request more data.
-            Args:
-                delay (float): Delay is seconds from exporting results to requesting next round of data collection.
             Returns (None): Returns nothing
         """
         logger.debug("Processing new data - %s", self.cavity_name)
