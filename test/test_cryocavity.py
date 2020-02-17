@@ -3,11 +3,13 @@ from unittest import TestCase
 from qlCalc.cryocavity import Cryocavity
 import time
 import math
+import threading
 
 
 class TestCryocavity(TestCase):
     c100 = Cryocavity(GETDATA=None, GMESLQ=None, CRFPLQ=None, CRRPLQ=None, DETALQ=None, ITOTLQ=None, STARTLQ=None,
-                      ENDLQ=None, cavity_name="my_cav", cavity_type="my_cav_type", length=0.7, RQ=868.9, update_queue=None)
+                      ENDLQ=None, cavity_name="my_cav", cavity_type="my_cav_type", length=0.7, RQ=868.9,
+                      update_queue=None, request_interval=1, shutdown_event=threading.Event())
     c100.update_formula_data(V_c=(17.794 * 0.7 * 1000000), P_f=(3.396 * 1000), P_r=(0.805 * 1000),
                              detune_angle=math.radians(0.67), I_tot=(201.8 / 1000000))
 
@@ -57,6 +59,15 @@ class TestCryocavity(TestCase):
         exp = 23937066.5884476000000
         res = self.c100.Q_lf
         self.assertAlmostEqual(exp, res, 6)
+
+    def test_calculation_performance_is_acceptable(self):
+        start = time.perf_counter()
+        n = 408
+        for x in range(0, n):
+            self.c100.run_calculations()
+        end = time.perf_counter()
+        print("{} calculations took {} seconds".format(n, end - start))
+        self.assertGreater(0.1, end-start)
 
 
 if __name__ == '__main__':
